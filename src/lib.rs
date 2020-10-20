@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use web_sys;
+use web_sys::console::log_1;
 use web_sys::SubtleCrypto;
 use web_sys::{AesCbcParams, CryptoKey};
 use yew::prelude::*;
@@ -41,10 +42,6 @@ fn subtle() -> SubtleCrypto {
         .subtle()
 }
 
-fn make_aes_cbc_params() -> AesCbcParams {
-    AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES))
-}
-
 struct GuessState {
     // Map from character to position.
     secret: HashMap<char, i32>,
@@ -54,8 +51,14 @@ struct GuessState {
 enum Mode {
     Uninitialized,
     CreateSecret,
-    LoadingSecret,
-    EncryptingSecret,
+    LoadingSecret {
+        success_closure: Closure<dyn FnMut(JsValue)>,
+        failure_closure: Closure<dyn FnMut(JsValue)>,
+    },
+    EncryptingSecret {
+        success_closure: Closure<dyn FnMut(JsValue)>,
+        failure_closure: Closure<dyn FnMut(JsValue)>,
+    },
 
     // Value is the base64-encoded, encrypted, secret.
     CreatedSecret(String),
@@ -64,7 +67,6 @@ enum Mode {
 
 struct Model {
     link: ComponentLink<Self>,
-    key: Option<CryptoKey>,
     mode: Mode,
     invalid_url: bool,
     secret_input_ref: NodeRef,
@@ -133,22 +135,28 @@ fn array_buffer_to_vec(arr: ArrayBuffer) -> Vec<u8> {
 }
 
 fn encrypt(s: String) -> impl Future<Output = Result<Vec<u8>, ()>> {
-    let promise = subtle().encrypt_with_str_and_buffer_source(
-        "AES-CBC",
-        &KEY.get().expect("Key uninitialized").key,
+    let promise = subtle().encrypt_with_object_and_buffer_source(
+        &AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES)),
+        &KEY.get().expect("Key uninitialized").0,
         &make_typed_array(s.as_bytes()),
     );
     wasm_bindgen_futures::JsFuture::from(promise.unwrap()).map(|result| {
-        result
-            .map(|v| array_buffer_to_vec(v.into()))
-            .map_err(|_ignored| ())
+        log_1(&"Here3".into());
+        if let Err(e) = result {
+            log_1(&e);
+            Err(())
+        } else {
+            let out = result.map(|v| array_buffer_to_vec(v.into())).unwrap();
+            log_1(&"Here4".into());
+            Ok(out)
+        }
     })
 }
 
 fn decrypt(data: &mut [u8]) -> impl Future<Output = Result<Vec<u8>, ()>> {
     let promise = subtle().decrypt_with_str_and_u8_array(
         "AES-CBC",
-        &KEY.get().expect("Key uninitialized").key,
+        &KEY.get().expect("Key uninitialized").0,
         data,
     );
     wasm_bindgen_futures::JsFuture::from(promise.unwrap()).map(|result| {
@@ -205,7 +213,6 @@ impl Component for Model {
         Self {
             link,
             invalid_url: false,
-            key: None,
             mode: Mode::Uninitialized,
             secret_input_ref,
             next_guess_input_ref,
@@ -218,27 +225,47 @@ impl Component for Model {
                 if let Some(secret_value_future) = secret_value_result {
                     let link1 = self.link.clone();
                     let link2 = self.link.clone();
-                    self.mode = Mode::LoadingSecret;
+                    let success_closure: Closure<dyn FnMut(JsValue)> =
+                        Closure::wrap(Box::new(move |s: JsValue| {
+                            link1.send_message(Msg::SecretLoaded(
+                                s.as_string().expect("We passed in a string"),
+                            ))
+                        }));
+                    let failure_closure: Closure<dyn FnMut(JsValue)> =
+                        Closure::wrap(Box::new(move |_| {
+                            link2.send_message(Msg::SecretLoadFailure)
+                        }));
                     wasm_bindgen_futures::future_to_promise(secret_value_future.map(|result| {
                         result
                             .map(|s| JsValue::from_str(&s))
                             .map_err(|_| JsValue::NULL)
                     }))
-                    .then(&Closure::wrap(Box::new(move |s: JsValue| {
-                        link1.send_message(Msg::SecretLoaded(
-                            s.as_string().expect("We passed in a string"),
-                        ))
-                    })))
-                    .catch(&Closure::wrap(Box::new(move |_| {
-                        link2.send_message(Msg::SecretLoadFailure)
-                    })));
+                    .then(&success_closure)
+                    .catch(&failure_closure);
+                    self.mode = Mode::LoadingSecret {
+                        success_closure,
+                        failure_closure,
+                    };
+                } else {
+                    self.mode = Mode::CreateSecret;
                 }
                 true
             }
             Msg::CreateSecret => {
-                self.mode = Mode::EncryptingSecret;
                 let link1 = self.link.clone();
                 let link2 = self.link.clone();
+                let success_closure: Closure<dyn FnMut(JsValue)> =
+                    Closure::wrap(Box::new(move |s: JsValue| {
+                        log_1(&"Here".into());
+                        link1.send_message(Msg::SecretEncrypted(
+                            s.as_string().expect("We passed in a string"),
+                        ))
+                    }));
+                let failure_closure: Closure<dyn FnMut(JsValue)> =
+                    Closure::wrap(Box::new(move |_| {
+                        log_1(&"Here f".into());
+                        link2.send_message(Msg::SecretEncryptFailure)
+                    }));
                 wasm_bindgen_futures::future_to_promise(
                     encrypt_secret_value(
                         self.secret_input_ref
@@ -253,14 +280,12 @@ impl Component for Model {
                             .map_err(|_| JsValue::NULL)
                     }),
                 )
-                .then(&Closure::wrap(Box::new(move |s: JsValue| {
-                    link1.send_message(Msg::SecretEncrypted(
-                        s.as_string().expect("We passed in a string"),
-                    ))
-                })))
-                .catch(&Closure::wrap(Box::new(move |_| {
-                    link2.send_message(Msg::SecretEncryptFailure)
-                })));
+                .then(&success_closure)
+                .catch(&failure_closure);
+                self.mode = Mode::EncryptingSecret {
+                    success_closure,
+                    failure_closure,
+                };
                 true
             }
             Msg::SecretLoadFailure => {
@@ -315,10 +340,10 @@ impl Component for Model {
                 {
                     match &self.mode {
                         Mode::Uninitialized => html!{},
-                        Mode::LoadingSecret => html!{},
+                        Mode::LoadingSecret{success_closure, failure_closure} => html!{},
                         Mode::CreatedSecret(encoded_secret) => html!{<a href={format!("/?{}",encoded_secret)}>{"Click here"}</a>},
                         Mode::CreateSecret => html!{},
-                        Mode::EncryptingSecret => html!{},
+                        Mode::EncryptingSecret{success_closure, failure_closure} => html!{},
                         Mode::Guess(guess_state) => html!{
                             <div class="guesses">
                                 {render_guesses(guess_state)}
@@ -346,19 +371,25 @@ fn render_guess(secret: &HashMap<char, i32>, guess: &String) -> Html {
 }
 
 #[derive(Debug)]
-struct KeyBox {
-    key: CryptoKey,
-}
+struct OnceCellContent<T>(T);
 
-unsafe impl Send for KeyBox {}
-unsafe impl Sync for KeyBox {}
+unsafe impl<T> Send for OnceCellContent<T> {}
+unsafe impl<T> Sync for OnceCellContent<T> {}
 
-static KEY: OnceCell<KeyBox> = OnceCell::new();
+static KEY: OnceCell<OnceCellContent<CryptoKey>> = OnceCell::new();
+static AES_CBC_PARAMS: OnceCell<OnceCellContent<AesCbcParams>> = OnceCell::new();
+
 #[wasm_bindgen(start)]
 pub fn run_app() {
+    AES_CBC_PARAMS.set(OnceCellContent(AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES)))).unwrap();
     let usages_arr = js_sys::Array::new();
     usages_arr.push(&"encrypt".into());
     usages_arr.push(&"decrypt".into());
+    let b: Box<dyn FnMut(JsValue)> = Box::new(|ck: JsValue| {
+        KEY.set(OnceCellContent(ck.into())).unwrap();
+        App::<Model>::new().mount_to_body();
+    });
+    let c = Closure::wrap(b);
     subtle()
         .import_key_with_str(
             "raw",
@@ -368,8 +399,8 @@ pub fn run_app() {
             &usages_arr,
         )
         .unwrap()
-        .then(&Closure::wrap(Box::new(|ck| {
-            KEY.set(KeyBox { key: ck.into() }).unwrap();
-            App::<Model>::new().mount_to_body();
-        })));
+        .then(&c);
+
+    // Leak the closure because it needs to survive the lifetime of the program.
+    c.forget();
 }
