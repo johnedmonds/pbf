@@ -354,7 +354,6 @@ impl Component for Model {
                         Mode::EncryptingSecret{success_closure, failure_closure} => html!{},
                         Mode::Guess(guess_state) => html!{
                             <div class="guesses">
-                                {"Answer"} {format!("{:?}", guess_state.secret)}
                                 {render_guesses(guess_state)}
                                 <label for="next_guess">{"Next guess"}</label>
                                 <input type="text" id="next_guess" ref={self.next_guess_input_ref.clone()}/>
