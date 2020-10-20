@@ -1,9 +1,14 @@
 #![recursion_limit = "512"]
 
+mod crypto;
+mod arrays;
+mod once;
+
+use crate::once::OnceCellContent;
+use crypto::{subtle, AES_CBC_PARAMS, KEY, KEY_BYTES, IV_BYTES, encrypt_secret_value, decrypt};
+use arrays::make_typed_array;
+
 use futures::FutureExt;
-use js_sys::ArrayBuffer;
-use js_sys::Uint8Array;
-use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Display;
@@ -11,37 +16,9 @@ use std::future::Future;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use web_sys;
-use web_sys::console::log_1;
 use web_sys::HtmlInputElement;
-use web_sys::SubtleCrypto;
-use web_sys::{AesCbcParams, CryptoKey};
+use web_sys::{AesCbcParams};
 use yew::prelude::*;
-
-// Should not be on the client but it's just a game so you're on the honor system for cheating.
-const KEY_BYTES: [u8; 16] = [
-    17, 30, 228, 65, 27, 183, 113, 24, 132, 66, 33, 16, 2, 40, 129, 30,
-];
-
-// Should not be reused for different secrets but it's just a game so don't cheat.
-const IV_BYTES: [u8; 16] = [
-    211, 60, 199, 125, 214, 98, 35, 48, 13, 218, 163, 50, 33, 28, 196, 66,
-];
-
-fn make_typed_array(arr: &[u8]) -> Uint8Array {
-    let out_arr = Uint8Array::new_with_length(arr.len() as u32);
-    for i in 0..arr.len() {
-        out_arr.set_index(i as u32, arr[i])
-    }
-    out_arr
-}
-
-fn subtle() -> SubtleCrypto {
-    web_sys::window()
-        .expect("Window feature must be enabled")
-        .crypto()
-        .expect("Crypto feature must be enabled.")
-        .subtle()
-}
 
 struct GuessState {
     // Map from character to position.
@@ -124,48 +101,6 @@ impl Display for PbfStats {
             )
         }
     }
-}
-
-fn array_buffer_to_vec(arr: ArrayBuffer) -> Vec<u8> {
-    let arr = Uint8Array::new_with_byte_offset(&arr, 0);
-    let mut out: Vec<u8> = Vec::with_capacity(arr.length() as usize);
-    for i in 0..arr.length() {
-        out.push(arr.get_index(i));
-    }
-    log_1(&format!("{:?}", out).into());
-    out
-}
-
-fn encrypt(s: String) -> impl Future<Output = Result<Vec<u8>, ()>> {
-    log_1(&s.clone().into());
-    let promise = subtle().encrypt_with_object_and_buffer_source(
-        &AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES)),
-        &KEY.get().expect("Key uninitialized").0,
-        &make_typed_array(s.as_bytes()),
-    );
-    wasm_bindgen_futures::JsFuture::from(promise.unwrap()).map(|result| {
-        result
-            .map(|v| array_buffer_to_vec(v.into()))
-            .map_err(|_ignored| ())
-    })
-}
-
-fn decrypt(data: &mut [u8]) -> impl Future<Output = Result<Vec<u8>, ()>> {
-    let promise = subtle().decrypt_with_object_and_u8_array(
-        &AES_CBC_PARAMS.get().unwrap().0,
-        &KEY.get().expect("Key uninitialized").0,
-        data,
-    );
-    wasm_bindgen_futures::JsFuture::from(promise.unwrap()).map(|result| {
-        result
-            .map(|v| array_buffer_to_vec(v.into()))
-            .map_err(|_ignored| ())
-    })
-}
-
-// Encrypts the given secret, and returns base-64 encoded encrypted data.
-fn encrypt_secret_value(secret: String) -> impl Future<Output = Result<String, ()>> {
-    encrypt(secret).map(|v| v.map(base64::encode))
 }
 
 // Reads the query portion of the url, decodes as base-64, decrypts, and returns the decrypted string.
@@ -380,15 +315,6 @@ type Secret = HashMap<char, HashSet<i32>>;
 fn render_guess(secret: &Secret, guess: &String) -> Html {
     html! {<li>{guess} {":"} {PbfStats::create(secret, guess)}</li>}
 }
-
-#[derive(Debug)]
-struct OnceCellContent<T>(T);
-
-unsafe impl<T> Send for OnceCellContent<T> {}
-unsafe impl<T> Sync for OnceCellContent<T> {}
-
-static KEY: OnceCell<OnceCellContent<CryptoKey>> = OnceCell::new();
-static AES_CBC_PARAMS: OnceCell<OnceCellContent<AesCbcParams>> = OnceCell::new();
 
 #[wasm_bindgen(start)]
 pub fn run_app() {
