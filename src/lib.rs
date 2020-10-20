@@ -4,7 +4,7 @@ use futures::FutureExt;
 use js_sys::ArrayBuffer;
 use js_sys::Uint8Array;
 use once_cell::sync::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Display;
 use std::future::Future;
@@ -12,6 +12,7 @@ use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use web_sys;
 use web_sys::console::log_1;
+use web_sys::HtmlInputElement;
 use web_sys::SubtleCrypto;
 use web_sys::{AesCbcParams, CryptoKey};
 use yew::prelude::*;
@@ -44,7 +45,7 @@ fn subtle() -> SubtleCrypto {
 
 struct GuessState {
     // Map from character to position.
-    secret: HashMap<char, i32>,
+    secret: Secret,
     guesses: Vec<String>,
 }
 
@@ -92,14 +93,14 @@ struct PbfStats {
 }
 
 impl PbfStats {
-    fn create(secret: &HashMap<char, i32>, guess: &str) -> Self {
+    fn create(secret: &Secret, guess: &str) -> Self {
         let mut p = 0;
         let mut f = 0;
         for (i, c) in guess.char_indices() {
             let i = i as i32;
             let secret_char = secret.get(&c);
-            if let Some(secret_char_index) = secret_char {
-                if *secret_char_index == i {
+            if let Some(secret_char_indicies) = secret_char {
+                if secret_char_indicies.contains(&i) {
                     f = f + 1;
                 } else {
                     p = p + 1;
@@ -131,31 +132,27 @@ fn array_buffer_to_vec(arr: ArrayBuffer) -> Vec<u8> {
     for i in 0..arr.length() {
         out.push(arr.get_index(i));
     }
+    log_1(&format!("{:?}", out).into());
     out
 }
 
 fn encrypt(s: String) -> impl Future<Output = Result<Vec<u8>, ()>> {
+    log_1(&s.clone().into());
     let promise = subtle().encrypt_with_object_and_buffer_source(
         &AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES)),
         &KEY.get().expect("Key uninitialized").0,
         &make_typed_array(s.as_bytes()),
     );
     wasm_bindgen_futures::JsFuture::from(promise.unwrap()).map(|result| {
-        log_1(&"Here3".into());
-        if let Err(e) = result {
-            log_1(&e);
-            Err(())
-        } else {
-            let out = result.map(|v| array_buffer_to_vec(v.into())).unwrap();
-            log_1(&"Here4".into());
-            Ok(out)
-        }
+        result
+            .map(|v| array_buffer_to_vec(v.into()))
+            .map_err(|_ignored| ())
     })
 }
 
 fn decrypt(data: &mut [u8]) -> impl Future<Output = Result<Vec<u8>, ()>> {
-    let promise = subtle().decrypt_with_str_and_u8_array(
-        "AES-CBC",
+    let promise = subtle().decrypt_with_object_and_u8_array(
+        &AES_CBC_PARAMS.get().unwrap().0,
         &KEY.get().expect("Key uninitialized").0,
         data,
     );
@@ -175,31 +172,45 @@ fn encrypt_secret_value(secret: String) -> impl Future<Output = Result<String, (
 // If anything fails (e.g. the user made an invalid url) returns an error.
 // If there was no query, returns None.
 fn get_secret_value() -> Option<Pin<Box<dyn Future<Output = Result<String, ()>>>>> {
-    web_sys::window()
+    let search_text_result = web_sys::window()
         .expect("Need window feature enabled")
         .location()
-        .search()
-        .ok()
-        .map(base64::decode)
-        .map(|encrypted_data| {
-            if let Ok(mut encrypted_data) = encrypted_data {
-                let ret: Pin<Box<dyn Future<Output = Result<String, ()>>>> = Box::pin(Box::new(
-                    decrypt(&mut encrypted_data).map(|decrypted_data: Result<Vec<u8>, ()>| {
-                        decrypted_data.and_then(|decrypted_data: Vec<u8>| {
-                            std::str::from_utf8(&decrypted_data)
-                                .map(|s| s.to_string())
-                                .map_err(|_ignored| ())
-                        })
-                    }),
-                ));
-                ret
-            } else {
-                let ret: Pin<Box<dyn Future<Output = Result<String, ()>>>> = Box::pin(Box::new(
-                    futures::future::ready::<Result<String, ()>>(Err(())),
-                ));
-                ret
-            }
-        })
+        .search();
+    if Ok("".to_string()) == search_text_result {
+        None
+    } else {
+        search_text_result
+            .ok()
+            .map(|s| base64::decode(&s[1..])) // 1.. to skip the ? at the beginning.
+            .map(|encrypted_data| {
+                if let Ok(mut encrypted_data) = encrypted_data {
+                    let ret: Pin<Box<dyn Future<Output = Result<String, ()>>>> =
+                        Box::pin(Box::new(decrypt(&mut encrypted_data).map(
+                            |decrypted_data: Result<Vec<u8>, ()>| {
+                                decrypted_data.and_then(|decrypted_data: Vec<u8>| {
+                                    std::str::from_utf8(&decrypted_data)
+                                        .map(|s| s.to_string())
+                                        .map_err(|_ignored| ())
+                                })
+                            },
+                        )));
+                    ret
+                } else {
+                    let ret: Pin<Box<dyn Future<Output = Result<String, ()>>>> = Box::pin(
+                        Box::new(futures::future::ready::<Result<String, ()>>(Err(()))),
+                    );
+                    ret
+                }
+            })
+    }
+}
+
+fn secret_to_map(secret: String) -> Secret {
+    let mut map: Secret = HashMap::new();
+    for (i, c) in secret.char_indices() {
+        map.entry(c).or_insert_with(HashSet::new).insert(i as i32);
+    }
+    map
 }
 
 impl Component for Model {
@@ -256,23 +267,21 @@ impl Component for Model {
                 let link2 = self.link.clone();
                 let success_closure: Closure<dyn FnMut(JsValue)> =
                     Closure::wrap(Box::new(move |s: JsValue| {
-                        log_1(&"Here".into());
                         link1.send_message(Msg::SecretEncrypted(
                             s.as_string().expect("We passed in a string"),
                         ))
                     }));
                 let failure_closure: Closure<dyn FnMut(JsValue)> =
                     Closure::wrap(Box::new(move |_| {
-                        log_1(&"Here f".into());
                         link2.send_message(Msg::SecretEncryptFailure)
                     }));
+
                 wasm_bindgen_futures::future_to_promise(
                     encrypt_secret_value(
                         self.secret_input_ref
-                            .get()
+                            .cast::<HtmlInputElement>()
                             .unwrap()
-                            .node_value()
-                            .unwrap_or("".to_string()),
+                            .value(),
                     )
                     .map(|result| {
                         result
@@ -295,7 +304,7 @@ impl Component for Model {
             Msg::SecretEncryptFailure => todo!(),
             Msg::SecretLoaded(secret) => {
                 self.mode = Mode::Guess(GuessState {
-                    secret: secret.char_indices().map(|(i, c)| (c, i as i32)).collect(),
+                    secret: secret_to_map(secret),
                     guesses: Vec::new(),
                 });
                 true
@@ -308,10 +317,9 @@ impl Component for Model {
                 if let Mode::Guess(ref mut guess_state) = self.mode {
                     guess_state.guesses.push(
                         self.next_guess_input_ref
-                            .get()
+                            .cast::<HtmlInputElement>()
                             .unwrap()
-                            .node_value()
-                            .unwrap_or("".to_string()),
+                            .value(),
                     );
                     true
                 } else {
@@ -346,6 +354,7 @@ impl Component for Model {
                         Mode::EncryptingSecret{success_closure, failure_closure} => html!{},
                         Mode::Guess(guess_state) => html!{
                             <div class="guesses">
+                                {"Answer"} {format!("{:?}", guess_state.secret)}
                                 {render_guesses(guess_state)}
                                 <label for="next_guess">{"Next guess"}</label>
                                 <input type="text" id="next_guess" ref={self.next_guess_input_ref.clone()}/>
@@ -366,7 +375,10 @@ fn render_guesses(guess_state: &GuessState) -> Html {
     }
 }
 
-fn render_guess(secret: &HashMap<char, i32>, guess: &String) -> Html {
+// Map of character -> set<Positions it appears in>.
+type Secret = HashMap<char, HashSet<i32>>;
+
+fn render_guess(secret: &Secret, guess: &String) -> Html {
     html! {<li>{guess} {":"} {PbfStats::create(secret, guess)}</li>}
 }
 
@@ -381,7 +393,12 @@ static AES_CBC_PARAMS: OnceCell<OnceCellContent<AesCbcParams>> = OnceCell::new()
 
 #[wasm_bindgen(start)]
 pub fn run_app() {
-    AES_CBC_PARAMS.set(OnceCellContent(AesCbcParams::new("AES-CBC", &make_typed_array(&IV_BYTES)))).unwrap();
+    AES_CBC_PARAMS
+        .set(OnceCellContent(AesCbcParams::new(
+            "AES-CBC",
+            &make_typed_array(&IV_BYTES),
+        )))
+        .unwrap();
     let usages_arr = js_sys::Array::new();
     usages_arr.push(&"encrypt".into());
     usages_arr.push(&"decrypt".into());
