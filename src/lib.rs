@@ -13,6 +13,7 @@ use arrays::make_typed_array;
 use crypto::{decrypt, encrypt_secret_value, subtle, AES_CBC_PARAMS, IV_BYTES, KEY, KEY_BYTES};
 
 use futures::FutureExt;
+use lazy_static::lazy_static;
 use std::future::Future;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
@@ -29,6 +30,20 @@ struct GuessState {
     secret: Secret<GuessSpace>,
     secret_length: usize,
     guesses: Vec<String>,
+}
+
+lazy_static! {
+    static ref EXAMPLE_GUESS_STATE: GuessState = GuessState {
+        secret: Secret::new(vec!['1', '2', '3']),
+        secret_length: 3,
+        guesses: vec![
+            "789".to_string(),
+            "345".to_string(),
+            "234".to_string(),
+            "134".to_string(),
+            "123".to_string()
+        ]
+    };
 }
 
 enum Mode {
@@ -184,6 +199,24 @@ impl Component for Model {
     fn view(&self) -> yew::virtual_dom::VNode {
         html! {
             <div>
+            <h1>{"Pico Bagel Fermi"}</h1>
+            <p>{r"Pico, Bagel, Fermi is a code-breaking game where one player
+            comes up with a secret, and the other players try to guess 
+            the secret. As players make guesses, they are given hints about
+            how similar their guess is to the solution."}</p>
+            <ul>
+                <li>{r"Bagel ('b'): Your guess contained none of the characters
+                in the hidden secret"}</li>
+                <li>{r"Fermi ('f'): You'll see one 'f' for each character in
+                your guess that appears in the hidden secret in the same place.
+                If the result of your guess is all 'f's (and is the same length
+                as the hidden secret) you win the game."}</li>
+                <li>{r"Pico ('p'): You'll see one 'p' for each character in your
+                guess that appears in the hidden secret (unless that guess
+                results in an 'f' instead)."}</li>
+            </ul>
+            <p>{"As an example, if the hidden secret is '123', your guesses may look as follows:"}</p>
+            {render_guesses(&EXAMPLE_GUESS_STATE)}
                 {
                     if self.invalid_url {
                         html!{<p>{"Invalid url"}</p>}
@@ -191,19 +224,16 @@ impl Component for Model {
                         html!{}
                     }
                 }
-                <p>{"Create a new game"}</p>
-                <label for={"secret_number_input"}>{"Secret number"}</label>
-                <input type="text" ref={self.secret_input_ref.clone()} id={"secret_number_input"}/>
-                <input type="submit" onclick=self.link.callback(|_|Msg::CreateSecret)/>
                 {
                     match &self.mode {
                         Mode::Uninitialized => html!{},
                         Mode::LoadingSecret => html!{},
-                        Mode::CreatedSecret(encoded_secret) => html!{<a href={format!("/?{}",encoded_secret)}>{"Click here"}</a>},
+                        Mode::CreatedSecret(encoded_secret) => html!{<a href={format!("/?{}",encoded_secret)}>{"Share this link to have someone guess the number"}</a>},
                         Mode::CreateSecret => html!{},
                         Mode::EncryptingSecret => html!{},
                         Mode::Guess(guess_state) => html!{
                             <div class="guesses">
+                            <h2>{"Try to guess what the hidden secret is."}</h2>
                                 {render_guesses(guess_state)}
                                 <label for="next_guess">{"Next guess"}</label>
                                 <input type="text" id="next_guess" ref={self.next_guess_input_ref.clone()}/>
@@ -212,6 +242,12 @@ impl Component for Model {
                         }
                     }
                 }
+
+                <h2>{"New game"}</h2>
+                <p>{"To create a new game, enter a secret to guess below, and click \"Create new game.\""}</p>
+                <label for={"secret_number_input"}>{"Secret number"}</label>
+                <input type="text" ref={self.secret_input_ref.clone()} id={"secret_number_input"}/>
+                <input type="submit" value="Create new game" onclick=self.link.callback(|_|Msg::CreateSecret)/>
             </div>
         }
     }
