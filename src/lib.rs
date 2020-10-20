@@ -1,28 +1,30 @@
 #![recursion_limit = "512"]
 
-mod crypto;
 mod arrays;
+mod crypto;
 mod once;
-
+mod pbf;
+mod secret;
 use crate::once::OnceCellContent;
-use crypto::{subtle, AES_CBC_PARAMS, KEY, KEY_BYTES, IV_BYTES, encrypt_secret_value, decrypt};
+use crate::pbf::PbfStats;
+use crate::secret::Secret;
 use arrays::make_typed_array;
+use crypto::{decrypt, encrypt_secret_value, subtle, AES_CBC_PARAMS, IV_BYTES, KEY, KEY_BYTES};
 
 use futures::FutureExt;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
 use web_sys;
+use web_sys::AesCbcParams;
 use web_sys::HtmlInputElement;
-use web_sys::{AesCbcParams};
 use yew::prelude::*;
 
 struct GuessState {
     // Map from character to position.
     secret: Secret,
+    secret_length: usize,
     guesses: Vec<String>,
 }
 
@@ -59,48 +61,6 @@ enum Msg {
     SecretEncryptFailure,
     SecretLoaded(String),
     SecretEncrypted(String),
-}
-
-struct PbfStats {
-    // Number of guess characters that exist in secret but not in the right position.
-    p: i32,
-
-    // Number of guess characters that exist in secret in the same position.
-    f: i32,
-}
-
-impl PbfStats {
-    fn create(secret: &Secret, guess: &str) -> Self {
-        let mut p = 0;
-        let mut f = 0;
-        for (i, c) in guess.char_indices() {
-            let i = i as i32;
-            let secret_char = secret.get(&c);
-            if let Some(secret_char_indicies) = secret_char {
-                if secret_char_indicies.contains(&i) {
-                    f = f + 1;
-                } else {
-                    p = p + 1;
-                }
-            }
-        }
-        PbfStats { p, f }
-    }
-}
-
-impl Display for PbfStats {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.p == 0 && self.f == 0 {
-            write!(f, "b")
-        } else {
-            write!(
-                f,
-                "{}{}",
-                vec!["f"; self.f as usize].join(""),
-                vec!["p"; self.p as usize].join("")
-            )
-        }
-    }
 }
 
 // Reads the query portion of the url, decodes as base-64, decrypts, and returns the decrypted string.
@@ -239,6 +199,7 @@ impl Component for Model {
             Msg::SecretEncryptFailure => todo!(),
             Msg::SecretLoaded(secret) => {
                 self.mode = Mode::Guess(GuessState {
+                    secret_length: secret.len(),
                     secret: secret_to_map(secret),
                     guesses: Vec::new(),
                 });
@@ -304,16 +265,19 @@ impl Component for Model {
 fn render_guesses(guess_state: &GuessState) -> Html {
     html! {
         <ul>
-          {for guess_state.guesses.iter().map(|guess|render_guess(&guess_state.secret, guess))}
+          {for guess_state.guesses.iter().map(|guess|render_guess(&guess_state.secret, guess_state.secret_length, guess))}
         </ul>
     }
 }
 
-// Map of character -> set<Positions it appears in>.
-type Secret = HashMap<char, HashSet<i32>>;
-
-fn render_guess(secret: &Secret, guess: &String) -> Html {
-    html! {<li>{guess} {":"} {PbfStats::create(secret, guess)}</li>}
+fn render_guess(secret: &Secret, secret_length: usize, guess: &String) -> Html {
+    let pbf_stats = PbfStats::create(secret, guess);
+    let success_html = if pbf_stats.f == secret_length as i32 {
+        html! {" (Correct)"}
+    } else {
+        html! {}
+    };
+    html! {<li>{guess} {" - "} {pbf_stats} {success_html} </li>}
 }
 
 #[wasm_bindgen(start)]

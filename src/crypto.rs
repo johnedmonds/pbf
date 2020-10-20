@@ -1,12 +1,12 @@
 // Should not be on the client but it's just a game so you're on the honor system for cheating.
-use futures::FutureExt;
-use web_sys::CryptoKey;
+use crate::arrays::{array_buffer_to_vec, make_typed_array};
 use crate::once::OnceCellContent;
+use core::future::Future;
+use futures::FutureExt;
 use once_cell::sync::OnceCell;
 use web_sys::AesCbcParams;
-use core::future::Future;
+use web_sys::CryptoKey;
 use web_sys::SubtleCrypto;
-use crate::arrays::{array_buffer_to_vec, make_typed_array};
 
 pub const KEY_BYTES: [u8; 16] = [
     17, 30, 228, 65, 27, 183, 113, 24, 132, 66, 33, 16, 2, 40, 129, 30,
