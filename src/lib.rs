@@ -5,6 +5,7 @@ mod crypto;
 mod once;
 mod pbf;
 mod secret;
+
 use crate::once::OnceCellContent;
 use crate::pbf::PbfStats;
 use crate::secret::Secret;
@@ -12,7 +13,6 @@ use arrays::make_typed_array;
 use crypto::{decrypt, encrypt_secret_value, subtle, AES_CBC_PARAMS, IV_BYTES, KEY, KEY_BYTES};
 
 use futures::FutureExt;
-use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use wasm_bindgen::prelude::*;
@@ -21,9 +21,11 @@ use web_sys::AesCbcParams;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
+type GuessSpace = char;
+
 struct GuessState {
     // Map from character to position.
-    secret: Secret,
+    secret: Secret<GuessSpace>,
     secret_length: usize,
     guesses: Vec<String>,
 }
@@ -98,14 +100,6 @@ fn get_secret_value() -> Option<Pin<Box<dyn Future<Output = Result<String, ()>>>
                 }
             })
     }
-}
-
-fn secret_to_map(secret: String) -> Secret {
-    let mut map: Secret = HashMap::new();
-    for (i, c) in secret.char_indices() {
-        map.entry(c).or_insert_with(HashSet::new).insert(i as i32);
-    }
-    map
 }
 
 impl Component for Model {
@@ -200,7 +194,7 @@ impl Component for Model {
             Msg::SecretLoaded(secret) => {
                 self.mode = Mode::Guess(GuessState {
                     secret_length: secret.len(),
-                    secret: secret_to_map(secret),
+                    secret: Secret::new(secret.chars().collect()),
                     guesses: Vec::new(),
                 });
                 true
@@ -270,8 +264,8 @@ fn render_guesses(guess_state: &GuessState) -> Html {
     }
 }
 
-fn render_guess(secret: &Secret, secret_length: usize, guess: &String) -> Html {
-    let pbf_stats = PbfStats::create(secret, guess);
+fn render_guess(secret: &Secret<GuessSpace>, secret_length: usize, guess: &String) -> Html {
+    let pbf_stats = secret.compare(&guess.chars().collect());
     let success_html = if pbf_stats.f == secret_length as i32 {
         html! {" (Correct)"}
     } else {
