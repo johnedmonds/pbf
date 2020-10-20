@@ -275,7 +275,7 @@ fn render_guess(secret: &Secret<GuessSpace>, secret_length: usize, guess: &Strin
 }
 
 #[wasm_bindgen(start)]
-pub fn run_app() {
+pub async fn run_app() {
     AES_CBC_PARAMS
         .set(OnceCellContent(AesCbcParams::new(
             "AES-CBC",
@@ -285,12 +285,7 @@ pub fn run_app() {
     let usages_arr = js_sys::Array::new();
     usages_arr.push(&"encrypt".into());
     usages_arr.push(&"decrypt".into());
-    let b: Box<dyn FnMut(JsValue)> = Box::new(|ck: JsValue| {
-        KEY.set(OnceCellContent(ck.into())).unwrap();
-        App::<Model>::new().mount_to_body();
-    });
-    let c = Closure::wrap(b);
-    subtle()
+    let key = wasm_bindgen_futures::JsFuture::from(subtle()
         .import_key_with_str(
             "raw",
             &make_typed_array(&KEY_BYTES),
@@ -298,9 +293,7 @@ pub fn run_app() {
             false,
             &usages_arr,
         )
-        .unwrap()
-        .then(&c);
-
-    // Leak the closure because it needs to survive the lifetime of the program.
-    c.forget();
+        .unwrap()).await;
+    KEY.set(OnceCellContent(key.unwrap().into())).unwrap();
+    App::<Model>::new().mount_to_body();    
 }
