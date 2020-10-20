@@ -20,6 +20,7 @@ use web_sys;
 use web_sys::AesCbcParams;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
+use yewtil::future::LinkFuture;
 
 type GuessSpace = char;
 
@@ -33,14 +34,8 @@ struct GuessState {
 enum Mode {
     Uninitialized,
     CreateSecret,
-    LoadingSecret {
-        success_closure: Closure<dyn FnMut(JsValue)>,
-        failure_closure: Closure<dyn FnMut(JsValue)>,
-    },
-    EncryptingSecret {
-        success_closure: Closure<dyn FnMut(JsValue)>,
-        failure_closure: Closure<dyn FnMut(JsValue)>,
-    },
+    LoadingSecret,
+    EncryptingSecret,
 
     // Value is the base64-encoded, encrypted, secret.
     CreatedSecret(String),
@@ -123,67 +118,32 @@ impl Component for Model {
             Msg::StartLoadingSecret => {
                 let secret_value_result = get_secret_value();
                 if let Some(secret_value_future) = secret_value_result {
-                    let link1 = self.link.clone();
-                    let link2 = self.link.clone();
-                    let success_closure: Closure<dyn FnMut(JsValue)> =
-                        Closure::wrap(Box::new(move |s: JsValue| {
-                            link1.send_message(Msg::SecretLoaded(
-                                s.as_string().expect("We passed in a string"),
-                            ))
-                        }));
-                    let failure_closure: Closure<dyn FnMut(JsValue)> =
-                        Closure::wrap(Box::new(move |_| {
-                            link2.send_message(Msg::SecretLoadFailure)
-                        }));
-                    wasm_bindgen_futures::future_to_promise(secret_value_future.map(|result| {
-                        result
-                            .map(|s| JsValue::from_str(&s))
-                            .map_err(|_| JsValue::NULL)
-                    }))
-                    .then(&success_closure)
-                    .catch(&failure_closure);
-                    self.mode = Mode::LoadingSecret {
-                        success_closure,
-                        failure_closure,
-                    };
+                    self.link.send_future(async {
+                        match secret_value_future.await {
+                            Ok(s) => Msg::SecretLoaded(s),
+                            Err(_) => Msg::SecretLoadFailure,
+                        }
+                    });
+                    self.mode = Mode::LoadingSecret;
                 } else {
                     self.mode = Mode::CreateSecret;
                 }
                 true
             }
             Msg::CreateSecret => {
-                let link1 = self.link.clone();
-                let link2 = self.link.clone();
-                let success_closure: Closure<dyn FnMut(JsValue)> =
-                    Closure::wrap(Box::new(move |s: JsValue| {
-                        link1.send_message(Msg::SecretEncrypted(
-                            s.as_string().expect("We passed in a string"),
-                        ))
-                    }));
-                let failure_closure: Closure<dyn FnMut(JsValue)> =
-                    Closure::wrap(Box::new(move |_| {
-                        link2.send_message(Msg::SecretEncryptFailure)
-                    }));
-
-                wasm_bindgen_futures::future_to_promise(
-                    encrypt_secret_value(
-                        self.secret_input_ref
-                            .cast::<HtmlInputElement>()
-                            .unwrap()
-                            .value(),
-                    )
-                    .map(|result| {
-                        result
-                            .map(|s| JsValue::from_str(&s))
-                            .map_err(|_| JsValue::NULL)
-                    }),
-                )
-                .then(&success_closure)
-                .catch(&failure_closure);
-                self.mode = Mode::EncryptingSecret {
-                    success_closure,
-                    failure_closure,
-                };
+                let encrypted_future = encrypt_secret_value(
+                    self.secret_input_ref
+                        .cast::<HtmlInputElement>()
+                        .unwrap()
+                        .value(),
+                );
+                self.link.send_future(async {
+                    match encrypted_future.await {
+                        Ok(s) => Msg::SecretEncrypted(s),
+                        Err(_) => Msg::SecretEncryptFailure,
+                    }
+                });
+                self.mode = Mode::EncryptingSecret;
                 true
             }
             Msg::SecretLoadFailure => {
@@ -238,10 +198,10 @@ impl Component for Model {
                 {
                     match &self.mode {
                         Mode::Uninitialized => html!{},
-                        Mode::LoadingSecret{success_closure, failure_closure} => html!{},
+                        Mode::LoadingSecret => html!{},
                         Mode::CreatedSecret(encoded_secret) => html!{<a href={format!("/?{}",encoded_secret)}>{"Click here"}</a>},
                         Mode::CreateSecret => html!{},
-                        Mode::EncryptingSecret{success_closure, failure_closure} => html!{},
+                        Mode::EncryptingSecret => html!{},
                         Mode::Guess(guess_state) => html!{
                             <div class="guesses">
                                 {render_guesses(guess_state)}
@@ -285,15 +245,18 @@ pub async fn run_app() {
     let usages_arr = js_sys::Array::new();
     usages_arr.push(&"encrypt".into());
     usages_arr.push(&"decrypt".into());
-    let key = wasm_bindgen_futures::JsFuture::from(subtle()
-        .import_key_with_str(
-            "raw",
-            &make_typed_array(&KEY_BYTES),
-            "AES-CBC",
-            false,
-            &usages_arr,
-        )
-        .unwrap()).await;
+    let key = wasm_bindgen_futures::JsFuture::from(
+        subtle()
+            .import_key_with_str(
+                "raw",
+                &make_typed_array(&KEY_BYTES),
+                "AES-CBC",
+                false,
+                &usages_arr,
+            )
+            .unwrap(),
+    )
+    .await;
     KEY.set(OnceCellContent(key.unwrap().into())).unwrap();
-    App::<Model>::new().mount_to_body();    
+    App::<Model>::new().mount_to_body();
 }

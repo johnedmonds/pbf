@@ -85,8 +85,14 @@ where
     }
 
     fn score_guess(&self, guess: &Vec<T>) -> Option<usize> {
-        self.cached_potential_outcomes.iter().map(|outcome|
-            self.available_guesses.iter().filter(|available_guess| &available_guess.compare(guess) == outcome).count())
+        self.cached_potential_outcomes
+            .iter()
+            .map(|outcome| {
+                self.available_guesses
+                    .iter()
+                    .filter(|available_guess| &available_guess.compare(guess) == outcome)
+                    .count()
+            })
             .min()
     }
 }
