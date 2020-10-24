@@ -9,8 +9,10 @@ pub struct Secret<T> {
     indexed: HashSet<T>,
 }
 
-impl <T> Secret<T> {
-    pub fn as_guess(&self) -> &Vec<T> {&self.in_order}
+impl<T> Secret<T> {
+    pub fn as_guess(&self) -> &Vec<T> {
+        &self.in_order
+    }
 }
 
 impl<T: Debug> Display for Secret<T> {

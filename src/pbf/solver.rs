@@ -1,13 +1,18 @@
-use std::fmt::Debug;
 use crate::secret::Secret;
 use crate::PbfStats;
 use itertools::Itertools;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::hash::Hash;
 
-fn real_combinations<T, I>(items: I, times: usize) -> impl Iterator<Item=Vec<T>>
-where I: Iterator<Item=T> + Clone, T: Clone {
-    std::iter::repeat(items).take(times).multi_cartesian_product()
+fn real_combinations<T, I>(items: I, times: usize) -> impl Iterator<Item = Vec<T>>
+where
+    I: Iterator<Item = T> + Clone,
+    T: Clone,
+{
+    std::iter::repeat(items)
+        .take(times)
+        .multi_cartesian_product()
 }
 
 // A guess someone has made with the results.
@@ -42,12 +47,13 @@ where
             B,
             F,
         }
-        let cached_potential_outcomes = real_combinations(vec![Pbf::P, Pbf::B, Pbf::F].into_iter(), guess_length)
-            .map(|result| PbfStats {
-                p: result.iter().filter(|pbf| pbf == &&Pbf::P).count() as i32,
-                f: result.iter().filter(|pbf| pbf == &&Pbf::F).count() as i32,
-            })
-            .collect();
+        let cached_potential_outcomes =
+            real_combinations(vec![Pbf::P, Pbf::B, Pbf::F].into_iter(), guess_length)
+                .map(|result| PbfStats {
+                    p: result.iter().filter(|pbf| pbf == &&Pbf::P).count() as i32,
+                    f: result.iter().filter(|pbf| pbf == &&Pbf::F).count() as i32,
+                })
+                .collect();
         Self {
             cached_potential_outcomes,
             guesses: Vec::new(),
@@ -71,9 +77,7 @@ where
         self.available_guesses.retain(|possible_solution| {
             self_guesses
                 .iter()
-                .all(|guess| {
-                    possible_solution.compare(&guess.guess) == guess.result
-                })
+                .all(|guess| possible_solution.compare(&guess.guess) == guess.result)
         });
     }
 
@@ -81,25 +85,22 @@ where
         if let [answer] = &*self.available_guesses {
             Some(answer.as_guess().to_vec())
         } else {
-        // Index the guesses so we can quickly check whether we've already guessed it.
-        let indexed_guesses: HashSet<&Vec<T>> =
-            self.guesses.iter().map(|guess| &guess.guess).collect();
-        real_combinations(self.guess_space.clone().into_iter(), self.guess_length)
-            .filter(|guess| !indexed_guesses.contains(guess))
-            .max_by_key(|guess| self.score_guess(guess))
+            // Index the guesses so we can quickly check whether we've already guessed it.
+            let indexed_guesses: HashSet<&Vec<T>> =
+                self.guesses.iter().map(|guess| &guess.guess).collect();
+            real_combinations(self.guess_space.clone().into_iter(), self.guess_length)
+                .filter(|guess| !indexed_guesses.contains(guess))
+                .max_by_key(|guess| self.score_guess(guess))
         }
     }
 
     fn score_guess(&self, guess: &Vec<T>) -> Option<usize> {
-        self
-            .cached_potential_outcomes
+        self.cached_potential_outcomes
             .iter()
             .map(|outcome| {
                 self.available_guesses
                     .iter()
-                    .filter(|available_guess| {
-                        &available_guess.compare(guess) != outcome
-                    })
+                    .filter(|available_guess| &available_guess.compare(guess) != outcome)
                     .count()
             })
             .min()
