@@ -1,4 +1,4 @@
-mod solver;
+pub mod solver;
 
 use std::fmt;
 use std::fmt::Display;

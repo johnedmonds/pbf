@@ -1,8 +1,14 @@
+use std::fmt::Debug;
 use crate::secret::Secret;
 use crate::PbfStats;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::hash::Hash;
+
+fn real_combinations<T, I>(items: I, times: usize) -> impl Iterator<Item=Vec<T>>
+where I: Iterator<Item=T> + Clone, T: Clone {
+    std::iter::repeat(items).take(times).multi_cartesian_product()
+}
 
 // A guess someone has made with the results.
 pub struct Guess<T> {
@@ -10,10 +16,7 @@ pub struct Guess<T> {
     pub result: PbfStats,
 }
 
-struct GuessState<T, Iter>
-where
-    Iter: Iterator<Item = T> + Clone,
-{
+pub struct GuessState<T> {
     cached_potential_outcomes: Vec<PbfStats>,
 
     guesses: Vec<Guess<T>>,
@@ -22,27 +25,24 @@ where
     available_guesses: Vec<Secret<T>>,
 
     // The things you can guess. For Pico, Bagel, Fermi, this is the digits from 0 to 9, inclusive.
-    guess_space: Iter,
+    guess_space: Vec<T>,
 
     // Length of the solution.
     guess_length: usize,
 }
 
-impl<T, Iter> GuessState<T, Iter>
+impl<T> GuessState<T>
 where
-    Iter: Iterator<Item = T> + Clone,
-    T: Clone + Eq + Hash,
+    T: Clone + Eq + Hash + Debug,
 {
-    fn new(guess_space: Iter, guess_length: usize) -> GuessState<T, Iter> {
+    pub fn new(guess_space: Vec<T>, guess_length: usize) -> GuessState<T> {
         #[derive(Clone, Eq, PartialEq)]
         enum Pbf {
             P,
             B,
             F,
         }
-        let cached_potential_outcomes = vec![Pbf::P, Pbf::B, Pbf::F]
-            .into_iter()
-            .combinations_with_replacement(guess_length)
+        let cached_potential_outcomes = real_combinations(vec![Pbf::P, Pbf::B, Pbf::F].into_iter(), guess_length)
             .map(|result| PbfStats {
                 p: result.iter().filter(|pbf| pbf == &&Pbf::P).count() as i32,
                 f: result.iter().filter(|pbf| pbf == &&Pbf::F).count() as i32,
@@ -51,9 +51,7 @@ where
         Self {
             cached_potential_outcomes,
             guesses: Vec::new(),
-            available_guesses: guess_space
-                .clone()
-                .combinations_with_replacement(guess_length)
+            available_guesses: real_combinations(guess_space.clone().into_iter(), guess_length)
                 .map(Secret::new)
                 .collect(),
             guess_space: guess_space,
@@ -61,7 +59,11 @@ where
         }
     }
 
-    fn add_guess(&mut self, guess: Guess<T>) {
+    pub fn guesses(&self) -> &Vec<Guess<T>> {
+        &self.guesses
+    }
+
+    pub fn add_guess(&mut self, guess: Guess<T>) {
         self.guesses.push(guess);
 
         // Rust doesn't like when we use self for some reason so work around it by borrowing here.
@@ -69,28 +71,35 @@ where
         self.available_guesses.retain(|possible_solution| {
             self_guesses
                 .iter()
-                .any(|guess| possible_solution.compare(&guess.guess) == guess.result)
+                .all(|guess| {
+                    possible_solution.compare(&guess.guess) == guess.result
+                })
         });
     }
 
     pub fn next_guess(&self) -> Option<Vec<T>> {
+        if let [answer] = &*self.available_guesses {
+            Some(answer.as_guess().to_vec())
+        } else {
         // Index the guesses so we can quickly check whether we've already guessed it.
         let indexed_guesses: HashSet<&Vec<T>> =
             self.guesses.iter().map(|guess| &guess.guess).collect();
-        self.guess_space
-            .clone()
-            .combinations_with_replacement(self.guess_length)
-            .filter(|guess| indexed_guesses.contains(guess))
+        real_combinations(self.guess_space.clone().into_iter(), self.guess_length)
+            .filter(|guess| !indexed_guesses.contains(guess))
             .max_by_key(|guess| self.score_guess(guess))
+        }
     }
 
     fn score_guess(&self, guess: &Vec<T>) -> Option<usize> {
-        self.cached_potential_outcomes
+        self
+            .cached_potential_outcomes
             .iter()
             .map(|outcome| {
                 self.available_guesses
                     .iter()
-                    .filter(|available_guess| &available_guess.compare(guess) == outcome)
+                    .filter(|available_guess| {
+                        &available_guess.compare(guess) != outcome
+                    })
                     .count()
             })
             .min()

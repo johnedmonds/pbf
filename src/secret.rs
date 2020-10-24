@@ -1,10 +1,23 @@
 use crate::PbfStats;
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::hash::Hash;
 
 pub struct Secret<T> {
     in_order: Vec<T>,
     indexed: HashSet<T>,
+}
+
+impl <T> Secret<T> {
+    pub fn as_guess(&self) -> &Vec<T> {&self.in_order}
+}
+
+impl<T: Debug> Display for Secret<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self.in_order)?;
+        Ok(())
+    }
 }
 
 impl<T: Clone + Hash + Eq> Secret<T> {

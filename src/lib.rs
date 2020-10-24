@@ -2,10 +2,12 @@
 
 mod arrays;
 mod crypto;
+mod hint_component;
 mod once;
 mod pbf;
 mod secret;
 
+use crate::hint_component::HintComponent;
 use crate::once::OnceCellContent;
 use crate::pbf::PbfStats;
 use crate::secret::Secret;
@@ -21,6 +23,7 @@ use web_sys;
 use web_sys::AesCbcParams;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
+use yew_router::{route::Route, service::RouteService, Switch};
 use yewtil::future::LinkFuture;
 
 type GuessSpace = char;
@@ -46,6 +49,14 @@ lazy_static! {
     };
 }
 
+#[derive(Switch, PartialEq, Eq)]
+enum AppRoute {
+    #[to = "/hint.html"]
+    Hint,
+    #[to = "/"]
+    Index,
+}
+
 enum Mode {
     Uninitialized,
     CreateSecret,
@@ -63,6 +74,7 @@ struct Model {
     invalid_url: bool,
     secret_input_ref: NodeRef,
     next_guess_input_ref: NodeRef,
+    route: Route<()>,
 }
 
 enum Msg {
@@ -117,6 +129,8 @@ impl Component for Model {
     type Properties = ();
 
     fn create(_: Self::Properties, link: ComponentLink<Self>) -> Self {
+        let route_service: RouteService<()> = RouteService::new();
+        let route = route_service.get_route();
         let secret_input_ref = NodeRef::default();
         let next_guess_input_ref = NodeRef::default();
         link.send_message(Msg::StartLoadingSecret);
@@ -126,6 +140,7 @@ impl Component for Model {
             mode: Mode::Uninitialized,
             secret_input_ref,
             next_guess_input_ref,
+            route,
         }
     }
     fn update(&mut self, msg: <Self as yew::Component>::Message) -> bool {
@@ -197,7 +212,12 @@ impl Component for Model {
         false // no properties to change.
     }
     fn view(&self) -> yew::virtual_dom::VNode {
-        html! {
+        if Some(AppRoute::Hint) == AppRoute::switch(self.route.clone()) {
+            return html! {
+                <HintComponent/>
+            };
+        }
+        return html! {
             <div>
             <h1>{"Pico Bagel Fermi"}</h1>
             <p>{r"Pico, Bagel, Fermi is a code-breaking game where one player
@@ -217,6 +237,7 @@ impl Component for Model {
             </ul>
             <p>{"As an example, if the hidden secret is '123', your guesses may look as follows:"}</p>
             {render_guesses(&EXAMPLE_GUESS_STATE)}
+            <p><a href="/hint.html">{"You can also get a hint for your next guess"}</a></p>
                 {
                     if self.invalid_url {
                         html!{<p>{"Invalid url"}</p>}
@@ -249,9 +270,10 @@ impl Component for Model {
                 <input type="text" ref={self.secret_input_ref.clone()} id={"secret_number_input"}/>
                 <input type="submit" value="Create new game" onclick=self.link.callback(|_|Msg::CreateSecret)/>
             </div>
-        }
+        };
     }
 }
+
 fn render_guesses(guess_state: &GuessState) -> Html {
     html! {
         <ul>
@@ -272,6 +294,7 @@ fn render_guess(secret: &Secret<GuessSpace>, secret_length: usize, guess: &Strin
 
 #[wasm_bindgen(start)]
 pub async fn run_app() {
+    console_error_panic_hook::set_once();
     AES_CBC_PARAMS
         .set(OnceCellContent(AesCbcParams::new(
             "AES-CBC",
